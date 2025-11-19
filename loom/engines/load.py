@@ -11,6 +11,13 @@ from loom.core.exceptions import ConfigurationError, LoadError
 from loom.core.models import LoadConfig, Record
 from loom.core.types import DestinationType, RecordStatus
 
+_TYPE_MAP = {
+    ".csv": DestinationType.CSV,
+    ".json": DestinationType.JSON,
+    ".jsonl": DestinationType.JSONL,
+    ".parquet": DestinationType.PARQUET,
+}
+
 logger = logging.getLogger(__name__)
 
 
@@ -43,23 +50,20 @@ class LoadEngine:
             return self.config.destination_type
 
         # Auto-detect from file extension
-        path = Path(self.config.destination)
-        suffix = path.suffix.lower()
+        destination_str = str(self.config.destination)
+        dot_idx = destination_str.rfind(".")
+        if dot_idx > 0:
+            suffix = destination_str[dot_idx:].lower()
+        else:
+            suffix = ""
 
-        type_map = {
-            ".csv": DestinationType.CSV,
-            ".json": DestinationType.JSON,
-            ".jsonl": DestinationType.JSONL,
-            ".parquet": DestinationType.PARQUET,
-        }
-
-        if suffix not in type_map:
+        if suffix not in _TYPE_MAP:
             raise ConfigurationError(
                 f"Cannot determine destination type from {suffix}. "
-                f"Supported: {list(type_map.keys())}"
+                f"Supported: {list(_TYPE_MAP.keys())}"
             )
 
-        return type_map[suffix]
+        return _TYPE_MAP[suffix]
 
     async def load(self, records: List[Record]) -> int:
         """Load all records to destination.
@@ -73,7 +77,9 @@ class LoadEngine:
         Raises:
             LoadError: If loading fails
         """
-        logger.info(f"Starting load to {self.config.destination}: {len(records)} total records")
+        logger.info(
+            f"Starting load to {self.config.destination}: {len(records)} total records"
+        )
         try:
             # Filter to only successfully evaluated records
             records_to_load = [
@@ -92,12 +98,12 @@ class LoadEngine:
                 logger.warning("No records to load after filtering")
                 return 0
 
-            logger.info(f"Loading {len(records_to_load)} records to {self.config.destination}")
+            logger.info(
+                f"Loading {len(records_to_load)} records to {self.config.destination}"
+            )
 
             # Run synchronous load in thread pool
-            loaded_count = await asyncio.to_thread(
-                self._load_sync, records_to_load
-            )
+            loaded_count = await asyncio.to_thread(self._load_sync, records_to_load)
 
             logger.info(
                 f"Successfully loaded {loaded_count} records to {self.config.destination}"
