@@ -52,14 +52,21 @@ class EvaluateEngine:
         try:
             # Get reference text if configured
             reference = None
-            if self.config.reference_field and self.config.reference_field in record.data:
+            if (
+                self.config.reference_field
+                and self.config.reference_field in record.data
+            ):
                 reference = str(record.data[self.config.reference_field])
 
             # Prepare evaluator list for Arbiter
-            evaluator_types = [eval_config.name for eval_config in self.config.evaluators]
+            evaluator_types = [
+                eval_config.name for eval_config in self.config.evaluators
+            ]
 
             # Call Arbiter evaluate function
-            logger.debug(f"Calling Arbiter for record {record.id} with evaluators: {evaluator_types}")
+            logger.debug(
+                f"Calling Arbiter for record {record.id} with evaluators: {evaluator_types}"
+            )
             result = await asyncio.wait_for(
                 arbiter_evaluate(
                     output=record.transformed_data,
@@ -99,7 +106,9 @@ class EvaluateEngine:
         except asyncio.TimeoutError:
             record.status = RecordStatus.ERROR
             record.error = f"Evaluation exceeded timeout ({self.config.timeout}s)"
-            logger.error(f"Evaluation timeout for record {record.id}: {self.config.timeout}s")
+            logger.error(
+                f"Evaluation timeout for record {record.id}: {self.config.timeout}s"
+            )
             raise EvaluateError(record.error)
         except Exception as e:
             record.status = RecordStatus.ERROR
@@ -145,15 +154,24 @@ class EvaluateEngine:
 
         Mathematical definition: passed_count > total_count / 2
         """
-        passed_count = 0
-        total_count = len(self.config.evaluators)
+        # Local variable speedup for lookups used in tight loop
+        evals = self.config.evaluators
+        eval_count = len(evals)
+        scores = record.evaluation_scores
 
-        for eval_config in self.config.evaluators:
-            score = record.evaluation_scores.get(eval_config.name)
+        # Pre-calculate the minimum number of passes needed to have a majority
+        majority_required = eval_count // 2 + 1  # For 5: 3, for 4: 3
+
+        passed_count = 0
+        for eval_config in evals:
+            score = scores.get(eval_config.name)
             if score is not None and score >= eval_config.threshold:
                 passed_count += 1
+                # Short-circuit as soon as majority is reached
+                if passed_count >= majority_required:
+                    return True
 
-        return passed_count > total_count / 2
+        return passed_count > eval_count / 2
 
     def _check_any_pass(self, record: Record) -> bool:
         """At least one evaluator must pass.
@@ -225,13 +243,21 @@ class EvaluateEngine:
         evaluated_records = []
         for result in results:
             if isinstance(result, Exception):
-                logger.error(f"Batch evaluation failed: {type(result).__name__}: {result}")
+                logger.error(
+                    f"Batch evaluation failed: {type(result).__name__}: {result}"
+                )
                 raise EvaluateError(f"Batch evaluation failed: {result}")
             evaluated_records.append(result)
 
         passed_count = sum(1 for r in evaluated_records if r.quality_gate_passed)
-        failed_count = sum(1 for r in evaluated_records if not r.quality_gate_passed and r.status != RecordStatus.ERROR)
-        error_count = sum(1 for r in evaluated_records if r.status == RecordStatus.ERROR)
+        failed_count = sum(
+            1
+            for r in evaluated_records
+            if not r.quality_gate_passed and r.status != RecordStatus.ERROR
+        )
+        error_count = sum(
+            1 for r in evaluated_records if r.status == RecordStatus.ERROR
+        )
         logger.info(
             f"Batch evaluation complete: {passed_count} passed, "
             f"{failed_count} failed quality gate, {error_count} errors out of {len(records)} total"
