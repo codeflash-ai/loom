@@ -82,7 +82,9 @@ class CircuitBreakerStats:
         """Record rejected call (circuit open)."""
         self.rejected_calls += 1
 
-    def record_state_change(self, from_state: CircuitState, to_state: CircuitState) -> None:
+    def record_state_change(
+        self, from_state: CircuitState, to_state: CircuitState
+    ) -> None:
         """Record state transition."""
         key = f"{from_state.value} -> {to_state.value}"
         self.state_transitions[key] = self.state_transitions.get(key, 0) + 1
@@ -138,7 +140,9 @@ class CircuitBreaker:
             f"timeout_seconds={self.config.timeout_seconds}"
         )
 
-    async def call(self, func: Callable[..., Awaitable[T]], *args: Any, **kwargs: Any) -> T:
+    async def call(
+        self, func: Callable[..., Awaitable[T]], *args: Any, **kwargs: Any
+    ) -> T:
         """Execute function with circuit breaker protection.
 
         Args:
@@ -288,9 +292,7 @@ class CircuitBreaker:
     async def reset(self) -> None:
         """Manually reset circuit breaker to closed state."""
         async with self._lock:
-            logger.info(
-                f"Circuit '{self.name}' manually reset to CLOSED state"
-            )
+            logger.info(f"Circuit '{self.name}' manually reset to CLOSED state")
             await self._transition_to(CircuitState.CLOSED)
 
 
@@ -310,9 +312,12 @@ def get_circuit_breaker(
     Returns:
         Existing or new circuit breaker
     """
-    if name not in _circuit_breakers:
-        _circuit_breakers[name] = CircuitBreaker(name, config)
-    return _circuit_breakers[name]
+    try:
+        return _circuit_breakers[name]
+    except KeyError:
+        cb = CircuitBreaker(name, config)
+        _circuit_breakers[name] = cb
+        return cb
 
 
 def get_all_circuit_breakers() -> dict[str, CircuitBreaker]:
