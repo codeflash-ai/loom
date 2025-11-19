@@ -64,7 +64,9 @@ class TransformEngine:
         try:
             with open(prompt_path, "r") as f:
                 content = f.read()
-            logger.debug(f"Loaded prompt template from {prompt_path} ({len(content)} chars)")
+            logger.debug(
+                f"Loaded prompt template from {prompt_path} ({len(content)} chars)"
+            )
             return Template(content)
         except Exception as e:
             logger.error(f"Failed to load prompt template: {type(e).__name__}: {e}")
@@ -127,14 +129,16 @@ class TransformEngine:
 
             # Call LLM with circuit breaker protection
             async def llm_call():
-                async with asyncio.timeout(self.config.timeout):
-                    messages = [{"role": "user", "content": prompt}]
-                    response = await client.complete(
+                messages = [{"role": "user", "content": prompt}]
+                response = await asyncio.wait_for(
+                    client.complete(
                         messages=messages,
                         temperature=self.config.temperature,
                         max_tokens=self.config.max_tokens,
-                    )
-                    return response.content
+                    ),
+                    timeout=self.config.timeout,
+                )
+                return response.content
 
             try:
                 transformed_text = await self.circuit_breaker.call(llm_call)
@@ -157,7 +161,9 @@ class TransformEngine:
         except asyncio.TimeoutError:
             record.status = RecordStatus.ERROR
             record.error = f"LLM call exceeded timeout ({self.config.timeout}s)"
-            logger.error(f"Timeout transforming record {record.id}: {self.config.timeout}s")
+            logger.error(
+                f"Timeout transforming record {record.id}: {self.config.timeout}s"
+            )
             raise TransformError(record.error)
         except Exception as e:
             record.status = RecordStatus.ERROR
@@ -195,19 +201,58 @@ class TransformEngine:
                     # Record already has error set
                     return record
 
-        tasks = [transform_with_semaphore(record) for record in records]
-        results = await asyncio.gather(*tasks, return_exceptions=True)
+        # Start tasks concurrently and process results as soon as they're available
+        tasks = [
+            asyncio.create_task(transform_with_semaphore(record)) for record in records
+        ]
+
+        # Use asyncio.as_completed for slightly reduced memory usage in large batches,
+        # and faster error detection: raise TransformError on first error encountered.
 
         # Handle exceptions
         transformed_records = []
-        for result in results:
-            if isinstance(result, Exception):
-                logger.error(f"Batch transform failed: {type(result).__name__}: {result}")
-                raise TransformError(f"Batch transform failed: {result}")
+        error_raised = False
+        exceptions = []
+        # Early error-out loop: stop further result aggregation if error encountered
+        for future in asyncio.as_completed(tasks):
+            try:
+                result = await future
+            except Exception as e:
+                logger.error(f"Batch transform failed: {type(e).__name__}: {e}")
+                exceptions.append(e)
+                error_raised = True
+                break
             transformed_records.append(result)
 
-        success_count = sum(1 for r in transformed_records if r.status == RecordStatus.TRANSFORMED)
-        error_count = sum(1 for r in transformed_records if r.status == RecordStatus.ERROR)
+        # Make sure to cancel any pending tasks if we error out early
+        if error_raised:
+            for t in tasks:
+                if not t.done():
+                    t.cancel()
+            # Wait for cancellation to finish
+            await asyncio.gather(*tasks, return_exceptions=True)
+            raise TransformError(f"Batch transform failed: {exceptions[0]}")
+
+        # Fill any remaining results (no error occurred)
+        if len(transformed_records) < len(records):
+            # Gather results from remaining tasks
+            more_results = await asyncio.gather(
+                *[t for t in tasks if not t.done()], return_exceptions=True
+            )
+            for result in more_results:
+                if isinstance(result, Exception):
+                    logger.error(
+                        f"Batch transform failed: {type(result).__name__}: {result}"
+                    )
+                    raise TransformError(f"Batch transform failed: {result}")
+                transformed_records.append(result)
+
+        success_count = sum(
+            1 for r in transformed_records if r.status == RecordStatus.TRANSFORMED
+        )
+        error_count = sum(
+            1 for r in transformed_records if r.status == RecordStatus.ERROR
+        )
         logger.info(
             f"Batch transformation complete: {success_count} successful, "
             f"{error_count} errors out of {len(records)} total"
@@ -220,5 +265,6 @@ class TransformEngine:
         if self.llm_client:
             logger.debug("Closing LLM client")
             from arbiter.core.llm_client import LLMManager
+
             await LLMManager.close()
             logger.info("LLM client closed")
