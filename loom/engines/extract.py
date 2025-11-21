@@ -11,6 +11,13 @@ from loom.core.exceptions import ConfigurationError, ExtractError
 from loom.core.models import ExtractConfig, Record
 from loom.core.types import RecordStatus, SourceType
 
+_TYPE_MAP = {
+    ".csv": SourceType.CSV,
+    ".json": SourceType.JSON,
+    ".jsonl": SourceType.JSONL,
+    ".parquet": SourceType.PARQUET,
+}
+
 logger = logging.getLogger(__name__)
 
 
@@ -39,27 +46,24 @@ class ExtractEngine:
         Raises:
             ConfigurationError: If source type cannot be determined
         """
-        if self.config.source_type:
-            return self.config.source_type
+        config_source_type = self.config.source_type
+        if config_source_type:
+            return config_source_type
 
-        # Auto-detect from file extension
-        path = Path(self.config.source)
-        suffix = path.suffix.lower()
+        # Extract suffix without instantiating a Path object if possible
+        source = self.config.source
+        # Fastest way: rsplit only once for suffix extraction
+        idx = source.rfind(".")
+        suffix = source[idx:].lower() if idx != -1 else ""
+        # Only use Path if additional path handling is needed (not here)
 
-        type_map = {
-            ".csv": SourceType.CSV,
-            ".json": SourceType.JSON,
-            ".jsonl": SourceType.JSONL,
-            ".parquet": SourceType.PARQUET,
-        }
-
-        if suffix not in type_map:
+        if suffix not in _TYPE_MAP:
             raise ConfigurationError(
                 f"Cannot determine source type from {suffix}. "
-                f"Supported: {list(type_map.keys())}"
+                f"Supported: {list(_TYPE_MAP.keys())}"
             )
 
-        return type_map[suffix]
+        return _TYPE_MAP[suffix]
 
     async def extract(self) -> List[Record]:
         """Extract all records from source.
@@ -151,7 +155,9 @@ class ExtractEngine:
 
             end = offset + limit if limit else None
             batch = all_records[offset:end]
-            logger.info(f"Batch extracted: {len(batch)} records (offset={offset}, limit={limit})")
+            logger.info(
+                f"Batch extracted: {len(batch)} records (offset={offset}, limit={limit})"
+            )
             return batch
         except Exception as e:
             logger.error(f"Batch extraction failed: {type(e).__name__}: {e}")
