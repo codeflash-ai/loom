@@ -41,7 +41,9 @@ class GlobalConfig(BaseModel):
 
     # Circuit Breaker Defaults
     circuit_breaker_enabled: bool = Field(
-        default_factory=lambda: os.getenv("LOOM_CIRCUIT_BREAKER_ENABLED", "true").lower()
+        default_factory=lambda: os.getenv(
+            "LOOM_CIRCUIT_BREAKER_ENABLED", "true"
+        ).lower()
         == "true"
     )
     circuit_breaker_failure_threshold: int = Field(
@@ -62,9 +64,7 @@ class GlobalConfig(BaseModel):
     )
 
     # Logging
-    log_level: str = Field(
-        default_factory=lambda: os.getenv("LOOM_LOG_LEVEL", "INFO")
-    )
+    log_level: str = Field(default_factory=lambda: os.getenv("LOOM_LOG_LEVEL", "INFO"))
     log_format: str = Field(
         default_factory=lambda: os.getenv(
             "LOOM_LOG_FORMAT", "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
@@ -88,7 +88,12 @@ def get_config() -> GlobalConfig:
 
 def reload_config() -> GlobalConfig:
     """Reload configuration from environment."""
-    load_dotenv(override=True)
+    # Use load_dotenv only if .env file exists, to avoid unnecessary filesystem I/O
+    # Avoid global import every call since 'config' is module level
+    import os
+
+    if os.path.exists(".env"):
+        load_dotenv(override=True)
     global config
     config = GlobalConfig()
     return config
